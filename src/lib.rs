@@ -1,6 +1,10 @@
 use serde_json::Value;
-use std::fs;
-use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
+use std::{fs, path::Path};
+use zed_extension_api::{
+    self as zed,
+    lsp::{Completion, CompletionKind, Symbol},
+    CodeLabel, CodeLabelSpan, LanguageServerId, Result, Worktree,
+};
 
 struct SqlsBinary {
     path: String,
@@ -31,7 +35,6 @@ impl SqlsExtension {
 
         Ok(SqlsBinary { path, args })
     }
-
     fn zed_managed_binary_path(&mut self, language_server_id: &LanguageServerId) -> Result<String> {
         if let Some(path) = &self.cached_binary_path {
             if fs::metadata(path).is_ok_and(|stat| stat.is_file()) {
@@ -123,23 +126,29 @@ impl zed::Extension for SqlsExtension {
         worktree: &Worktree,
     ) -> Result<zed::Command> {
         let sqls_binary = self.language_server_binary(language_server_id, worktree)?;
-
-        let mut args = sqls_binary.args.unwrap_or_default();
         let root_path = worktree.root_path();
-        args.push("-l".to_string());
-        args.push(format!("{}/sqls.log", root_path));
+        let mut args = sqls_binary.args.unwrap_or_default();
 
-        let possible_configs = [
-            format!("{}/.sqls/config.yml", root_path),
-            format!("{}/config.yml", root_path),
-        ];
+        // -t: Trace para ver o JSON-RPC no log do Zed
+        args.push("-t".to_string());
 
-        for config_path in possible_configs {
-            if fs::metadata(&config_path).is_ok_and(|stat| stat.is_file()) {
-                args.push("-c".to_string());
-                args.push(config_path);
-                break;
+        let possible_relative_paths = ["/.sqls/config.yml", "/config.yml"];
+
+        let mut found_config = Some(".sqls/config.yml".to_string());
+
+        for relative_path in possible_relative_paths {
+            let full_path = Path::new(&root_path).join(relative_path);
+            if full_path.exists() {
+                if let Some(path_str) = full_path.to_str() {
+                    found_config = Some(path_str.to_string());
+                    break;
+                }
             }
+        }
+
+        if let Some(path) = found_config {
+            args.push("-c".to_string());
+            args.push(path);
         }
 
         Ok(zed::Command {
@@ -156,36 +165,102 @@ impl zed::Extension for SqlsExtension {
     ) -> Result<Option<Value>> {
         let settings =
             zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree);
-        Ok(settings.ok().and_then(|settings| settings.settings))
+        Ok(settings.ok().and_then(|s| s.settings))
     }
 
     fn language_server_initialization_options(
         &mut self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
-    ) -> Result<Option<Value>> {
-        let settings =
-            zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree);
+    ) -> Result<Option<serde_json::Value>> {
+        // Pega o que o usuário definiu no settings.json do Zed
+        let user_settings =
+            zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree)
+                .ok()
+                .and_then(|s| s.initialization_options)
+                .unwrap_or(serde_json::json!({}));
 
-        if let Ok(settings) = &settings {
-            if let Some(options) = &settings.initialization_options {
-                return Ok(Some(options.clone()));
+        // Forçamos o suporte a CodeActionLiteralSupport no handshake inicial
+        let mut options = user_settings.as_object().cloned().unwrap_or_default();
+
+        // O sqls às vezes precisa saber que o cliente suporta comandos específicos
+        options.insert(
+            "codeAction".into(),
+            serde_json::json!({
+                "isPreferred": true,
+                "kind": "refactor"
+            }),
+        );
+
+        Ok(Some(serde_json::Value::Object(options)))
+    }
+
+    fn label_for_completion(
+        &self,
+        _language_server_id: &LanguageServerId,
+        completion: Completion,
+    ) -> Option<CodeLabel> {
+        let kind = completion.kind?;
+
+        match kind {
+            // TABELAS: O sqls geralmente usa Class ou Struct
+            CompletionKind::Class | CompletionKind::Struct => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![
+                        CodeLabelSpan::literal("TABLE ".to_string(), Some("keyword".into())),
+                        CodeLabelSpan::literal(label.clone(), None),
+                    ],
+                    filter_range: (0..label.len()).into(),
+                    code: format!("TABLE {label}"),
+                })
             }
+
+            // COLUNAS: O sqls usa Field ou Property
+            CompletionKind::Field | CompletionKind::Property => {
+                let label = completion.label;
+                let detail = completion.detail.unwrap_or_default();
+                let code = format!("{label} {detail}");
+
+                Some(CodeLabel {
+                    spans: vec![
+                        CodeLabelSpan::literal(label.clone(), Some("property".into())),
+                        CodeLabelSpan::literal(" ".to_string(), None),
+                        CodeLabelSpan::literal(detail, Some("type".into())),
+                    ],
+                    filter_range: (0..label.len()).into(),
+                    code,
+                })
+            }
+
+            // PALAVRAS-CHAVE: SELECT, FROM, JOIN
+            CompletionKind::Keyword => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(
+                        label.clone(),
+                        Some("keyword".into()),
+                    )],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // O resto você pode deixar o Zed tratar ou retornar None para o padrão
+            _ => None,
         }
+    }
 
-        // Se não houver config manual, injetamos uma configuração padrão
-        // apontando para um data.db absoluto na raiz do projeto.
-        // Isso ajuda o sqls a não se perder no caminho relativo.
-        let db_path = format!("{}/data.db", worktree.root_path());
-
-        Ok(Some(serde_json::json!({
-            "connections": [
-                {   "alias": "main",
-                    "driver": "sqlite3",
-                    "dataSourceName": db_path
-                }
-            ]
-        })))
+    fn label_for_symbol(
+        &self,
+        _language_server_id: &LanguageServerId,
+        symbol: Symbol,
+    ) -> Option<CodeLabel> {
+        Some(CodeLabel {
+            code: symbol.name.clone(),
+            spans: vec![CodeLabelSpan::literal(symbol.name.clone(), None)],
+            filter_range: (0..symbol.name.len()).into(),
+        })
     }
 }
 
