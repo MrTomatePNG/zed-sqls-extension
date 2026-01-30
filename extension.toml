@@ -6,6 +6,10 @@ schema_version = 1
 authors = ["Mr_Tomate"]
 repository = "https://github.com/MrTomatePNG/zed-sqls-extension.git"
 
+[grammars.SQL]
+repository = "https://github.com/DerekStride/tree-sitter-sql"
+commit = "1c70b7db248983cc75a92a9846ac16b2aee32d65"
+
 [language_servers.sqls]
 name = "sqls"
 languages = ["SQL"]
