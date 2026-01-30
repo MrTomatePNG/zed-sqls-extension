@@ -1,0 +1,11 @@
+id = "sqls"
+name = "SQLS"
+description = "Language Server Protocol support for SQL using sqls"
+version = "0.1.0"
+schema_version = 1
+authors = ["Mr_Tomate"]
+repository = "https://github.com/MrTomatePNG/zed-sqls-extension.git"
+
+[language_servers.sqls]
+name = "sqls"
+languages = ["SQL"]
