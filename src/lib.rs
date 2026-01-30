@@ -173,22 +173,28 @@ impl zed::Extension for SqlsExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<Option<serde_json::Value>> {
-        // Pega o que o usuário definiu no settings.json do Zed
         let user_settings =
             zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree)
                 .ok()
                 .and_then(|s| s.initialization_options)
                 .unwrap_or(serde_json::json!({}));
 
-        // Forçamos o suporte a CodeActionLiteralSupport no handshake inicial
         let mut options = user_settings.as_object().cloned().unwrap_or_default();
 
-        // O sqls às vezes precisa saber que o cliente suporta comandos específicos
+        // O sqls espera as configs dentro de um objeto "config" ou na raiz
+        // Tentamos injetar a preferência de Kind para as CodeActions
         options.insert(
-            "codeAction".into(),
+            "capabilities".into(),
             serde_json::json!({
-                "isPreferred": true,
-                "kind": "refactor"
+                "textDocument": {
+                    "codeAction": {
+                        "codeActionLiteralSupport": {
+                            "codeActionKind": {
+                                "valueSet": ["refactor", "quickfix", "source"]
+                            }
+                        }
+                    }
+                }
             }),
         );
 
@@ -203,7 +209,7 @@ impl zed::Extension for SqlsExtension {
         let kind = completion.kind?;
 
         match kind {
-            // TABELAS: O sqls geralmente usa Class ou Struct
+            // TABELAS
             CompletionKind::Class | CompletionKind::Struct => {
                 let label = completion.label;
                 Some(CodeLabel {
@@ -216,7 +222,7 @@ impl zed::Extension for SqlsExtension {
                 })
             }
 
-            // COLUNAS: O sqls usa Field ou Property
+            // COLUNAS
             CompletionKind::Field | CompletionKind::Property => {
                 let label = completion.label;
                 let detail = completion.detail.unwrap_or_default();
@@ -233,7 +239,7 @@ impl zed::Extension for SqlsExtension {
                 })
             }
 
-            // PALAVRAS-CHAVE: SELECT, FROM, JOIN
+            // PALAVRAS-CHAVE
             CompletionKind::Keyword => {
                 let label = completion.label;
                 Some(CodeLabel {
@@ -246,7 +252,170 @@ impl zed::Extension for SqlsExtension {
                 })
             }
 
-            // O resto você pode deixar o Zed tratar ou retornar None para o padrão
+            // MÉTODOS
+            CompletionKind::Method => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("method".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label.clone(),
+                })
+            }
+
+            // FUNÇÕES
+            CompletionKind::Function => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("function".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label.clone(),
+                })
+            }
+
+            // CONSTRUTORES
+            CompletionKind::Constructor => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("constructor".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label.clone(),
+                })
+            }
+
+            // VARIÁVEIS
+            CompletionKind::Variable => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("variable".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // INTERFACES
+            CompletionKind::Interface => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("interface".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // MÓDULOS
+            CompletionKind::Module => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("module".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // UNIDADES
+            CompletionKind::Unit => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("unit".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // SNIPPETS
+            CompletionKind::Snippet => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("snippet".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // CORES
+            CompletionKind::Color => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("color".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // ARQUIVOS
+            CompletionKind::File => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("file".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // REFERÊNCIAS
+            CompletionKind::Reference => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("reference".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // PASTAS
+            CompletionKind::Folder => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("folder".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // MEMBROS DE ENUM
+            CompletionKind::EnumMember => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("enum_member".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // EVENTOS
+            CompletionKind::Event => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("event".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // OPERADORES
+            CompletionKind::Operator => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(&label, Some("operator".into()))],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // PARÂMETROS DE TIPO
+            CompletionKind::TypeParameter => {
+                let label = completion.label;
+                Some(CodeLabel {
+                    spans: vec![CodeLabelSpan::literal(
+                        &label,
+                        Some("type_parameter".into()),
+                    )],
+                    filter_range: (0..label.len()).into(),
+                    code: label,
+                })
+            }
+
+            // Outros tipos não reconhecidos
             _ => None,
         }
     }
