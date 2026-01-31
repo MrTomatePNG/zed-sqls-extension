@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::{fs, path::Path};
+use std::fs;
 use zed_extension_api::{
     self as zed,
     lsp::{Completion, CompletionKind, Symbol},
@@ -126,34 +126,10 @@ impl zed::Extension for SqlsExtension {
         worktree: &Worktree,
     ) -> Result<zed::Command> {
         let sqls_binary = self.language_server_binary(language_server_id, worktree)?;
-        let root_path = worktree.root_path();
-        let mut args = sqls_binary.args.unwrap_or_default();
-
-        // -t: Trace para ver o JSON-RPC no log do Zed
-        args.push("-t".to_string());
-
-        let possible_relative_paths = ["/.sqls/config.yml", "/config.yml"];
-
-        let mut found_config = Some(".sqls/config.yml".to_string());
-
-        for relative_path in possible_relative_paths {
-            let full_path = Path::new(&root_path).join(relative_path);
-            if full_path.exists() {
-                if let Some(path_str) = full_path.to_str() {
-                    found_config = Some(path_str.to_string());
-                    break;
-                }
-            }
-        }
-
-        if let Some(path) = found_config {
-            args.push("-c".to_string());
-            args.push(path);
-        }
 
         Ok(zed::Command {
             command: sqls_binary.path,
-            args,
+            args: sqls_binary.args.unwrap_or(vec!["-t".into()]),
             env: vec![],
         })
     }
@@ -166,39 +142,6 @@ impl zed::Extension for SqlsExtension {
         let settings =
             zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree);
         Ok(settings.ok().and_then(|s| s.settings))
-    }
-
-    fn language_server_initialization_options(
-        &mut self,
-        language_server_id: &LanguageServerId,
-        worktree: &Worktree,
-    ) -> Result<Option<serde_json::Value>> {
-        let user_settings =
-            zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree)
-                .ok()
-                .and_then(|s| s.initialization_options)
-                .unwrap_or(serde_json::json!({}));
-
-        let mut options = user_settings.as_object().cloned().unwrap_or_default();
-
-        // O sqls espera as configs dentro de um objeto "config" ou na raiz
-        // Tentamos injetar a preferência de Kind para as CodeActions
-        options.insert(
-            "capabilities".into(),
-            serde_json::json!({
-                "textDocument": {
-                    "codeAction": {
-                        "codeActionLiteralSupport": {
-                            "codeActionKind": {
-                                "valueSet": ["refactor", "quickfix", "source"]
-                            }
-                        }
-                    }
-                }
-            }),
-        );
-
-        Ok(Some(serde_json::Value::Object(options)))
     }
 
     fn label_for_completion(
