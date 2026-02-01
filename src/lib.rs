@@ -1,12 +1,11 @@
 use serde_json::Value;
+use serde_yml;
 use std::path::Path;
-use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
-
-const PROXY: &str = include_str!("proxy.mjs");
+use zed_extension_api::{self as zed, GithubReleaseOptions, LanguageServerId, Result, Worktree};
 
 struct SqlsExtension;
 impl SqlsExtension {
-    async fn get_sqls_path_or_install(
+    fn get_sqls_path_or_install(
         &self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
@@ -23,48 +22,78 @@ impl SqlsExtension {
             return Ok(path);
         }
 
-        // If not found, proceed with installation
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::Downloading,
         );
 
-        let release = zed::latest_github_release("sqls-server/sqls".to_string()).await?;
+        let release = zed::latest_github_release(
+            "sqls-server/sqls",
+            GithubReleaseOptions {
+                require_assets: true,
+                pre_release: false,
+            },
+        )?;
+
         let (current_os, current_arch) = zed::current_platform();
-        let asset_name = format!("sqls-{}-{}-{}", release.version, current_os, current_arch);
+
+        let os_str = match current_os {
+            zed::Os::Mac => "darwin",
+            zed::Os::Linux => "linux",
+            zed::Os::Windows => "windows",
+        };
+        let arch_str = match current_arch {
+            zed::Architecture::Aarch64 => "aarch64",
+            zed::Architecture::X8664 => "x86_64",
+            zed::Architecture::X86 => "x86",
+        };
+
+        let expected_asset_prefix = format!("sqls-{}-{}", os_str, arch_str);
 
         let asset = release
             .assets
             .iter()
-            .find(|asset| asset.name.contains(&asset_name))
-            .ok_or_else(|| format!("no asset found for {:?}", zed::current_platform()))?;
+            .find(|asset| {
+                asset.name.contains(&expected_asset_prefix) && asset.name.ends_with(".zip")
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Não foi encontrado um asset para a plataforma {}-{}. Prefixo esperado: {}",
+                    os_str, arch_str, expected_asset_prefix
+                )
+            })?;
 
-        let downloaded_path = zed::download_file(
+        let binary_filename_in_extension_dir = if current_os == zed::Os::Windows {
+            "sqls.exe"
+        } else {
+            "sqls"
+        };
+
+        zed::download_file(
             &asset.download_url,
-            format!("sqls-{}", release.version).to_string(),
-        )
-        .await?;
-        zed::make_file_executable(&downloaded_path).await?;
+            binary_filename_in_extension_dir,
+            zed::DownloadedFileType::Zip,
+        )?;
 
-        zed::set_language_server_installation_status(
-            language_server_id,
-            &zed::LanguageServerInstallationStatus::Installed,
-        );
+        zed::make_file_executable(binary_filename_in_extension_dir)?;
 
-        Ok(downloaded_path.to_string())
+        Ok(binary_filename_in_extension_dir.to_owned())
     }
 
     fn load_initialization_options(&self, worktree: &Worktree) -> Result<Option<Value>> {
         let root = worktree.root_path();
         let root_path = Path::new(&root);
 
-        let config_paths = [root_path.join(".sqlsrc.json"), root_path.join("sqls.json")];
+        let config_path = root_path.join("config.yml");
 
-        for path in &config_paths {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if let Ok(config) = serde_json::from_str::<Value>(&content) {
-                    return Ok(Some(serde_json::json!({ "sqls": config })));
-                }
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_yml::from_str::<Value>(&content) {
+                return Ok(Some(serde_json::json!({ "sqls": config })));
+            } else {
+                eprintln!(
+                    "Erro ao parsear {}: Conteúdo YAML inválido.",
+                    config_path.display()
+                );
             }
         }
         Ok(None)
@@ -76,23 +105,21 @@ impl zed::Extension for SqlsExtension {
         Self
     }
 
-    async fn language_server_command(
+    fn language_server_command(
         &mut self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<zed::Command> {
-        let sqls_path = self
-            .get_sqls_path_or_install(language_server_id, worktree)
-            .await?;
+        let sqls = self.get_sqls_path_or_install(language_server_id, worktree)?;
 
         Ok(zed::Command {
-            command: zed::node_binary_path()?,
-            args: vec!["-e".into(), PROXY.into(), sqls_path],
+            command: sqls,
+            args: Default::default(),
             env: Default::default(),
         })
     }
 
-    async fn language_server_initialization_options(
+    fn language_server_initialization_options(
         &mut self,
         _language_server_id: &LanguageServerId,
         worktree: &Worktree,
