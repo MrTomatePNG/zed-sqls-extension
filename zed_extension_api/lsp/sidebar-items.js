@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CompletionKind","InsertTextFormat","SymbolKind"],"struct":["Completion","Symbol"]};

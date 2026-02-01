@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["CommandSettings","ContextServerSettings","LanguageSettings","LspSettings"]};
