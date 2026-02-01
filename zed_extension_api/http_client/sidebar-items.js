@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HttpMethod","RedirectPolicy"],"fn":["fetch","fetch_stream"],"struct":["HttpRequest","HttpRequestBuilder","HttpResponse","HttpResponseStream"]};

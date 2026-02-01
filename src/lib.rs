@@ -1,11 +1,12 @@
 use serde_json::Value;
 use std::path::Path;
-use zed_extension_api::{self as zed, node_binary_path, LanguageServerId, Result, Worktree};
+use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
+
+const PROXY: &str = include_str!("proxy.mjs");
 
 struct SqlsExtension;
-
 impl SqlsExtension {
-    fn get_sqls_path(
+    async fn get_sqls_path_or_install(
         &self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
@@ -13,14 +14,44 @@ impl SqlsExtension {
         let settings =
             zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree);
 
-        let path = settings
+        if let Some(path) = settings
             .ok()
             .and_then(|s| s.binary)
             .and_then(|b| b.path)
             .or_else(|| worktree.which("sqls"))
-            .unwrap_or_else(|| "~/go/bin/sqls".to_string());
+        {
+            return Ok(path);
+        }
 
-        Ok(path)
+        // If not found, proceed with installation
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::Downloading,
+        );
+
+        let release = zed::latest_github_release("sqls-server/sqls".to_string()).await?;
+        let (current_os, current_arch) = zed::current_platform();
+        let asset_name = format!("sqls-{}-{}-{}", release.version, current_os, current_arch);
+
+        let asset = release
+            .assets
+            .iter()
+            .find(|asset| asset.name.contains(&asset_name))
+            .ok_or_else(|| format!("no asset found for {:?}", zed::current_platform()))?;
+
+        let downloaded_path = zed::download_file(
+            &asset.download_url,
+            format!("sqls-{}", release.version).to_string(),
+        )
+        .await?;
+        zed::make_file_executable(&downloaded_path).await?;
+
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::Installed,
+        );
+
+        Ok(downloaded_path.to_string())
     }
 
     fn load_initialization_options(&self, worktree: &Worktree) -> Result<Option<Value>> {
@@ -45,22 +76,23 @@ impl zed::Extension for SqlsExtension {
         Self
     }
 
-    fn language_server_command(
+    async fn language_server_command(
         &mut self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<zed::Command> {
-        let sqls_path = self.get_sqls_path(language_server_id, worktree)?;
-        let proxy_code = include_str!("proxy.mjs");
+        let sqls_path = self
+            .get_sqls_path_or_install(language_server_id, worktree)
+            .await?;
 
         Ok(zed::Command {
             command: zed::node_binary_path()?,
-            args: vec!["-e".into(), proxy_code.into(), sqls_path],
-            env: vec![],
+            args: vec!["-e".into(), PROXY.into(), sqls_path],
+            env: Default::default(),
         })
     }
 
-    fn language_server_initialization_options(
+    async fn language_server_initialization_options(
         &mut self,
         _language_server_id: &LanguageServerId,
         worktree: &Worktree,
