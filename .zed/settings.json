@@ -1,0 +1,29 @@
+{
+  "lsp": {
+    "sqls": {
+      "initialization_options": {
+        "connectionConfig": {
+          "driver": "sqlite3",
+          "dataSourceName": "./testDataBase.db",
+        },
+      },
+      "settings": {
+        "sqls": {
+          "lowercaseKeywords": false,
+          "connections": [
+            {
+              "alias": "dev",
+              "driver": "sqlite3",
+              "dataSourceName": "./dev.db",
+            },
+            {
+              "alias": "prod",
+              "driver": "sqlite3",
+              "dataSourceName": "./prod.db",
+            },
+          ],
+        },
+      },
+    },
+  },
+}
