@@ -1,6 +1,4 @@
 use serde_json::Value;
-use serde_yml;
-use std::path::Path;
 use zed_extension_api::{self as zed, GithubReleaseOptions, LanguageServerId, Result, Worktree};
 
 struct SqlsExtension;
@@ -79,25 +77,6 @@ impl SqlsExtension {
 
         Ok(binary_filename_in_extension_dir.to_owned())
     }
-
-    fn load_initialization_options(&self, worktree: &Worktree) -> Result<Option<Value>> {
-        let root = worktree.root_path();
-        let root_path = Path::new(&root);
-
-        let config_path = root_path.join("config.yml");
-
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(config) = serde_yml::from_str::<Value>(&content) {
-                return Ok(Some(serde_json::json!({ "sqls": config })));
-            } else {
-                eprintln!(
-                    "Erro ao parsear {}: Conteúdo YAML inválido.",
-                    config_path.display()
-                );
-            }
-        }
-        Ok(None)
-    }
 }
 
 impl zed::Extension for SqlsExtension {
@@ -114,17 +93,28 @@ impl zed::Extension for SqlsExtension {
 
         Ok(zed::Command {
             command: sqls,
-            args: Default::default(),
+            args: vec!["-t".into()],
             env: Default::default(),
         })
     }
 
     fn language_server_initialization_options(
         &mut self,
-        _language_server_id: &LanguageServerId,
+        language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<Option<Value>> {
-        self.load_initialization_options(worktree)
+        let settings =
+            zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
+        Ok(settings.initialization_options)
+    }
+    fn language_server_workspace_configuration(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &Worktree,
+    ) -> Result<Option<Value>> {
+        let settings =
+            zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
+        Ok(settings.settings)
     }
 }
 
