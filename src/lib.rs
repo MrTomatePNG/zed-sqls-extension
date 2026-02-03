@@ -1,16 +1,17 @@
 use serde_json::Value;
-use zed_extension_api::{self as zed, GithubReleaseOptions, LanguageServerId, Result, Worktree};
+use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
 
-struct SqlsExtension;
+struct SqlsExtension {
+    cached_binary_path: Option<String>,
+}
 impl SqlsExtension {
     fn get_sqls_path_or_install(
-        &self,
+        &mut self,
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<String> {
         let settings =
             zed::settings::LspSettings::for_worktree(language_server_id.as_ref(), worktree);
-
         if let Some(path) = settings
             .ok()
             .and_then(|s| s.binary)
@@ -22,66 +23,85 @@ impl SqlsExtension {
 
         zed::set_language_server_installation_status(
             language_server_id,
-            &zed::LanguageServerInstallationStatus::Downloading,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
         );
 
         let release = zed::latest_github_release(
             "sqls-server/sqls",
-            GithubReleaseOptions {
+            zed::GithubReleaseOptions {
                 require_assets: true,
                 pre_release: false,
             },
         )?;
 
-        let (current_os, current_arch) = zed::current_platform();
+        let (platform, _arch) = zed::current_platform();
 
-        let os_str = match current_os {
+        let os_str = match platform {
             zed::Os::Mac => "darwin",
             zed::Os::Linux => "linux",
             zed::Os::Windows => "windows",
         };
-        let arch_str = match current_arch {
-            zed::Architecture::Aarch64 => "aarch64",
-            zed::Architecture::X8664 => "x86_64",
-            zed::Architecture::X86 => "x86",
-        };
 
-        let expected_asset_prefix = format!("sqls-{}-{}", os_str, arch_str);
+        let asset_name = format!("sqls-{}", os_str);
 
         let asset = release
             .assets
             .iter()
-            .find(|asset| {
-                asset.name.contains(&expected_asset_prefix) && asset.name.ends_with(".zip")
-            })
-            .ok_or_else(|| {
-                format!(
-                    "Não foi encontrado um asset para a plataforma {}-{}. Prefixo esperado: {}",
-                    os_str, arch_str, expected_asset_prefix
-                )
-            })?;
+            .find(|asset| asset.name.starts_with(&asset_name))
+            .ok_or_else(|| format!("no asset found matching {:?}", asset_name))?;
 
-        let binary_filename_in_extension_dir = if current_os == zed::Os::Windows {
-            "sqls.exe"
-        } else {
-            "sqls"
+        let version_dir = format!("sqls-{}", release.version);
+        let binary_path = match platform {
+            zed::Os::Windows => format!("{}/sqls.exe", version_dir),
+            _ => format!("{}/sqls", version_dir),
         };
 
-        zed::download_file(
-            &asset.download_url,
-            binary_filename_in_extension_dir,
-            zed::DownloadedFileType::Zip,
-        )?;
+        if !std::fs::metadata(&binary_path).is_ok_and(|stat| stat.is_file()) {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::Downloading,
+            );
 
-        zed::make_file_executable(binary_filename_in_extension_dir)?;
+            zed::download_file(
+                &asset.download_url,
+                &version_dir,
+                zed::DownloadedFileType::Zip,
+            )?;
 
-        Ok(binary_filename_in_extension_dir.to_owned())
+            zed::make_file_executable(&binary_path)?;
+
+            self.remove_outdated_versions(&version_dir)?;
+        }
+
+        self.cached_binary_path = Some(binary_path.clone());
+        Ok(binary_path)
+    }
+
+    fn remove_outdated_versions(&self, current_version_dir: &str) -> Result<()> {
+        let versions_dir = ".";
+        if let Ok(entries) = std::fs::read_dir(versions_dir) {
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.is_dir() {
+                        let path = entry.path();
+                        if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                            if dir_name.starts_with("sqls-") && dir_name != current_version_dir {
+                                let _ = std::fs::remove_dir_all(&path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
 impl zed::Extension for SqlsExtension {
     fn new() -> Self {
-        Self
+        Self {
+            cached_binary_path: None,
+        }
     }
 
     fn language_server_command(
