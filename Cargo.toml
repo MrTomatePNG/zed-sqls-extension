@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
-
+path = "src/sqls.rs"
 [dependencies]
 serde_json = "1.0.149"
 serde_yml = "0.0.12"
